@@ -1,5 +1,7 @@
 // Author:   Tong Qin               qintonguav@gmail.com
 // 	         Shaozu Cao 		    saozu.cao@connect.ust.hk
+/*
+构建残差*/
 
 #include <ceres/ceres.h>
 #include <ceres/rotation.h>
@@ -11,10 +13,11 @@
 
 struct LidarEdgeFactor
 {
+	//点到线残差计算
 	LidarEdgeFactor(Eigen::Vector3d curr_point_, Eigen::Vector3d last_point_a_,
 					Eigen::Vector3d last_point_b_, double s_)
 		: curr_point(curr_point_), last_point_a(last_point_a_), last_point_b(last_point_b_), s(s_) {}
-
+	//bool operator is an overloading
 	template <typename T>
 	bool operator()(const T *q, const T *t, T *residual) const
 	{
@@ -26,15 +29,18 @@ struct LidarEdgeFactor
 		//Eigen::Quaternion<T> q_last_curr{q[3], T(s) * q[0], T(s) * q[1], T(s) * q[2]};
 		Eigen::Quaternion<T> q_last_curr{q[3], q[0], q[1], q[2]};
 		Eigen::Quaternion<T> q_identity{T(1), T(0), T(0), T(0)};
+		//考虑运动补偿，kitti点云已经补偿过，所以可以忽略下面对四元数slerp插值以及平移的线性插值
 		q_last_curr = q_identity.slerp(T(s), q_last_curr);
 		Eigen::Matrix<T, 3, 1> t_last_curr{T(s) * t[0], T(s) * t[1], T(s) * t[2]};
 
 		Eigen::Matrix<T, 3, 1> lp;
+		//Odometry线程时，下面试讲当前帧lidar坐标系下的cp点变换到上一帧的Lidar坐标系，然后在上一帧的lidar坐标系计算点到线的残差距离
+		// Mapping线程时，下面是将当前帧lidar坐标系下的cp点变换到world坐标系，然后再world坐标系计算点到线的残差距离
 		lp = q_last_curr * cp + t_last_curr;
 
 		Eigen::Matrix<T, 3, 1> nu = (lp - lpa).cross(lp - lpb);
 		Eigen::Matrix<T, 3, 1> de = lpa - lpb;
-
+		//所有的residual都不用加fabs，因为Ceres内部会求其平方作为最终的残差项
 		residual[0] = nu.x() / de.norm();
 		residual[1] = nu.y() / de.norm();
 		residual[2] = nu.z() / de.norm();
@@ -46,7 +52,7 @@ struct LidarEdgeFactor
 									   const Eigen::Vector3d last_point_b_, const double s_)
 	{
 		return (new ceres::AutoDiffCostFunction<
-				LidarEdgeFactor, 3, 4, 3>(
+				LidarEdgeFactor, 3, 4, 3>(//残差的维度、优化变量q的维度，优化变量t的维度
 			new LidarEdgeFactor(curr_point_, last_point_a_, last_point_b_, s_)));
 	}
 
